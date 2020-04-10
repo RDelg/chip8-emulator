@@ -1,19 +1,22 @@
+import os
 import sys
+import time
 
 import pygame
 import numpy as np
-from pygame.locals import *
 
 class Cpu(object):
 
     _N_REGISTERS = 16
     _MAX_STACK_LEN = 16
     _RAM_BYTES = 4096
-    _DISPLAY_SIZE = (64,32)
-    _N_KEYS = 16
+    _DISPLAY_SIZE = (32,64)
 
-    def __init__(self, display):
+    def __init__(self, display, keyboard):
         self.display = display
+        self.keyboard = keyboard
+        # key states reference
+        self.key_states = keyboard.key_states
         # Registers
         # General purpose registers
         self.reg_V = np.zeros(shape=self._N_REGISTERS, dtype=np.uint8)
@@ -23,7 +26,7 @@ class Cpu(object):
         self.reg_DT = np.uint8(0x00)
         self.reg_ST = np.uint8(0x00)
         # Program counter
-        self.reg_PC = np.uint16(0x0000)
+        self.reg_PC = np.uint16(0x0200)
         # Stack pointer
         self.reg_SP = np.uint8(0x00)
         # Stack
@@ -54,8 +57,6 @@ class Cpu(object):
             shape=self._DISPLAY_SIZE[0]*self._DISPLAY_SIZE[1],
             dtype=np.uint8
         )
-        # key states
-        self.key_states = np.zeros(shape=self._N_KEYS, dtype=np.uint8)
 
     def cycle(self):
         instruction = self.memory[self.reg_PC] << 8 ^ self.memory[self.reg_PC+1]
@@ -119,7 +120,7 @@ class Cpu(object):
             # 8xy5 - SUB Vx, Vy - Set Vx = Vx - Vy, set VF = NOT borrow
             elif n == 0x5:
                 self.reg_V[0xF] = self.reg_V[x] > self.reg_V[y]
-                self.reg_V[x] -= self.reg_V[y]
+                self.reg_V[x] = np.uint8(np.uint16(self.reg_V[x]) - np.uint16(self.reg_V[y]))
             # 8xy6 - SHR Vx {, Vy} - Set Vx = Vx SHR 1
             elif n == 0x6:
                 self.reg_V[0xF] = (self.reg_V[X] & 0x01);
@@ -164,7 +165,7 @@ class Cpu(object):
                 self.reg_V[x] = self.reg_DT
             # Fx0A - LD Vx, K - Wait for a key press, store the value of the key in Vx
             elif n == 0x0A:
-                self.reg_V[x] = self.wait_for_key()
+                self.reg_V[x] = self.wait_for_pressed_key()
             # Fx15 - LD DT, Vx - Set delay timer = Vx
             elif n == 0x15:
                 self.reg_DT = self.reg_V[x]
@@ -192,7 +193,6 @@ class Cpu(object):
                      self.reg_V[i] = self.memory[self.reg_VI + i]
         self.reg_PC += 2
 
-
     def draw_sprite(self, x, y, n):
         sprite = self.memory[self.reg_VI: self.reg_VI+n]
         for row, byte in enumerate(sprite):
@@ -200,50 +200,90 @@ class Cpu(object):
                 bit = (byte >> col) & 1
                 idx = np.ravel_multi_index(np.array([x + row, y + 7 - col]), self._DISPLAY_SIZE, mode='wrap')
                 if (bit and self.video_memory[idx]):
-                    V[0xF] = 1;
+                    self.reg_V[0xF] = 1;
                 self.video_memory[idx] ^= bit
 
+        # for x in self.video_memory.reshape(self._DISPLAY_SIZE[0], self._DISPLAY_SIZE[1]):
+        #     print(x[:20])
 
     def update_screen(self):
         self.display.draw(self.video_memory)
 
+    def wait_for_pressed_key(self):
+        while len(np.argwhere(self.key_states)) == 0:
+            keyboard.get_pressed_keys()
+        return self.key_states[np.argwhere(self.key_states)[0]]
+
+class Keyboard(object):
+    _KEYS = { 
+        pygame.K_1: 0x1, pygame.K_2: 0x2, pygame.K_3: 0x3, pygame.K_4: 0xC,
+        pygame.K_q: 0x4, pygame.K_w: 0x5, pygame.K_e: 0x6, pygame.K_r: 0xD,
+        pygame.K_a: 0x7, pygame.K_s: 0x8, pygame.K_d: 0x9, pygame.K_f: 0xE,
+        pygame.K_z: 0xA, pygame.K_x: 0x0, pygame.K_c: 0xB, pygame.K_v: 0xF 
+    }
+
+    def __init__(self):
+        self.key_states = np.zeros(shape=len(self._KEYS), dtype=np.uint8)
+
+
+    def get_pressed_keys(self):
+        for event in pygame.event.get():
+            if event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
+                if event.key in self._KEYS.keys():
+                    print('pressed: ' + str(self._KEYS[event.key]))
+                    self.key_states[self._KEYS[event.key]] = event.type == pygame.KEYDOWN
+            elif event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
 
 class Display(object):
 
-    def __init__(self, shape, title='Chip8 - Emulator'):
+    _FILL_COLOR = (0x99, 0xBD, 0x2A)
+
+    def __init__(
+            self,
+            shape,
+            scale_factor,
+            title='Chip8 - Emulator'):
         self.shape = shape
+        self.scale_factor = scale_factor
         pygame.init()
         window = pygame.display.set_caption(title)
-        self.canvas = pygame.display.set_mode( (64, 32) )
-        self.canvas.fill((0x99, 0xBD, 0x2A))
+        self.canvas = pygame.display.set_mode( (self.shape[1]*scale_factor, self.shape[0]*scale_factor) )
+        self.canvas.fill(self._FILL_COLOR)
         pygame.display.update()
         
 
     def draw(self, image):
-        with np.nditer([image.reshape((64,32))], ['multi_index'], [['readonly']]) as it:
+        self.canvas.fill(self._FILL_COLOR)
+        # for x in image.reshape(self.shape[0],self.shape[1]):
+        #     print(x[:20])
+        with np.nditer([image.reshape((self.shape[0], self.shape[1]))], ['multi_index'], [['readonly']]) as it:
             while not it.finished:
                 if it[0][...] == 1:
                     pygame.draw.rect(
                         self.canvas,
                         (0x00, 0x00, 0x00),
-                        (it.multi_index[1], it.multi_index[0], 1, 1),
+                        (it.multi_index[1]*self.scale_factor, it.multi_index[0]*self.scale_factor, self.scale_factor, self.scale_factor),
                         0
                     )
                 it.iternext()
         pygame.display.update()
 
-    def run(self):
-        while True:
-            for event in pygame.event.get():
-                if event.type == QUIT:
-                    pygame.quit()
-                    sys.exit()
-
 
 if __name__ == '__main__':
-    shape = (64, 32)
-    display = Display(shape=shape)
-    cpu = Cpu(display=display)
-    cpu.draw_sprite(0,0,10)
-    cpu.update_screen()
-    display.run()
+    shape = (32, 64)
+    display = Display(shape=shape, scale_factor=10)
+    keyboard = Keyboard()
+    cpu = Cpu(display=display, keyboard=keyboard)
+    with open(os.path.join("roms", "PONG"), "rb") as f:
+        file_bytes = f.read()
+        for i in range(len(file_bytes)):
+            cpu.memory[0x200+i] = int(file_bytes[i])
+    # cpu.draw_sprite(0,0,15)
+    # cpu.update_screen()
+    while cpu.reg_PC < len(cpu.memory):
+        cpu.cycle()
+        keyboard.get_pressed_keys()
+        time.sleep(1/1000)
