@@ -123,7 +123,7 @@ class Cpu(object):
                 self.reg_V[x] = np.uint8(np.uint16(self.reg_V[x]) - np.uint16(self.reg_V[y]))
             # 8xy6 - SHR Vx {, Vy} - Set Vx = Vx SHR 1
             elif n == 0x6:
-                self.reg_V[0xF] = (self.reg_V[X] & 0x01);
+                self.reg_V[0xF] = (self.reg_V[x] & 0x01);
                 self.reg_V[x] >>= 1;
             # 8xy7 - SUBN Vx, Vy - Set Vx = Vy - Vx, set VF = NOT borrow
             elif n == 0x7:
