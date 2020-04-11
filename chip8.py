@@ -21,7 +21,7 @@ class Cpu(object):
         # General purpose registers
         self.reg_V = np.zeros(shape=self._N_REGISTERS, dtype=np.uint8)
         # Memory adressing register
-        self.reg_VI = np.uint16(0x0000)
+        self.reg_I = np.uint16(0x0000)
         # Special purpose registers
         self.reg_DT = np.uint8(0x00)
         self.reg_ST = np.uint8(0x00)
@@ -57,16 +57,19 @@ class Cpu(object):
             shape=self._DISPLAY_SIZE[0]*self._DISPLAY_SIZE[1],
             dtype=np.uint8
         )
+        self.cycle_start_time = 0
+        # Initialize sound
+        pygame.mixer.music.load("pong.wav")
 
     def cycle(self):
         instruction = self.memory[self.reg_PC] << 8 ^ self.memory[self.reg_PC+1]
         nnn = instruction & 0x0FFF
-        n = instruction & 0x00F
+        n = instruction & 0x000F
         x = (instruction & 0x0F00) >> 8
         y = (instruction & 0x00F0) >> 4
-        kk = instruction & 0x0FF
+        kk = instruction & 0x00FF
         # 00E0 - CLS - Clear the display.
-        if instruction == 0x00E0: 
+        if instruction == 0x00E0:
             self.video_memory[...] = 0
             self.update_screen()
         # 00EE - RET - Return from a subroutine.
@@ -80,11 +83,10 @@ class Cpu(object):
         elif instruction & 0xF000 == 0x2000:
             self.stack[self.reg_SP] = self.reg_PC
             self.reg_SP += 1
-            self.reg_PC = (instruction & 0x0FFF) - 2
+            self.reg_PC = nnn - 2
         # 3xkk - SE Vx, byte - Skip next instruction if Vx = kk
         elif instruction & 0xF000 == 0x3000:
             if self.reg_V[x] == kk:
-                print('kk')
                 self.reg_PC += 2
         # 4xkk - SNE Vx, byte - Skip next instruction if Vx != kk
         elif instruction & 0xF000 == 0x4000:
@@ -93,9 +95,8 @@ class Cpu(object):
         # 5xy0 - SE Vx, Vy - Skip next instruction if Vx = Vy
         elif instruction & 0xF000 == 0x5000:
             if self.reg_V[x] == self.reg_V[y]:
-                print('self')
                 self.reg_PC += 2 
-        # 6xkk - LD Vx, byte - Set Vx = kk.
+        # 6xkk - LD Vx, byte - Set Vx = kk
         elif instruction & 0xF000 == 0x6000:
             self.reg_V[x] = kk
         # 7xkk - ADD Vx, byte - Set Vx = Vx + kk
@@ -122,7 +123,7 @@ class Cpu(object):
             # 8xy5 - SUB Vx, Vy - Set Vx = Vx - Vy, set VF = NOT borrow
             elif n == 0x5:
                 self.reg_V[0xF] = self.reg_V[x] > self.reg_V[y]
-                self.reg_V[x] = np.uint8(np.uint16(self.reg_V[x]) - np.uint16(self.reg_V[y]))
+                self.reg_V[x] = np.uint8((np.uint16(self.reg_V[x]) - np.uint16(self.reg_V[y])) & 0xFF)
             # 8xy6 - SHR Vx {, Vy} - Set Vx = Vx SHR 1
             elif n == 0x6:
                 self.reg_V[0xF] = (self.reg_V[x] & 0x01);
@@ -130,10 +131,10 @@ class Cpu(object):
             # 8xy7 - SUBN Vx, Vy - Set Vx = Vy - Vx, set VF = NOT borrow
             elif n == 0x7:
                 self.reg_V[0xF] = self.reg_V[y] > self.reg_V[x]
-                self.reg_V[x] = self.reg_V[y] - self.reg_V[x]
+                self.reg_V[x] = np.uint8((np.uint16(self.reg_V[y]) - np.uint16(self.reg_V[x])) & 0xFF)
             # 8xyE - SHL Vx {, Vy} - Set Vx = Vx SHL 1
             elif n == 0xE:
-                self.reg_V[0xF] = (self.reg_V[x] >> 7);
+                self.reg_V[0xF] = self.reg_V[x] & 0x80
                 self.reg_V[x] <<= 1;
         # 9xy0 - SNE Vx, Vy - Skip next instruction if Vx != Vy
         elif instruction & 0xF000 == 0x9000:
@@ -141,7 +142,7 @@ class Cpu(object):
                 self.reg_PC += 2 
         # Annn - LD I, addr - Set I = nnn
         elif instruction & 0xF000 == 0xA000:
-            self.reg_VI = nnn
+            self.reg_I = nnn
         # Bnnn - JP V0, addr - Jump to location nnn + V0.
         elif instruction & 0xF000 == 0xB000:
             self.reg_PC = nnn + self.reg_V[0x0] - 2
@@ -152,53 +153,64 @@ class Cpu(object):
         elif instruction & 0xF000 == 0xD000:
             self.draw_sprite(self.reg_V[x], self.reg_V[y], n)
             self.update_screen()
-            # time.sleep(10)
         elif instruction & 0xF000 == 0xE000:
             # Ex9E - SKP Vx - Skip next instruction if key with the value of Vx is pressed
-            if n == 0xE:
+            if kk == 0x9E:
                 if self.key_states[self.reg_V[x]]:
                     self.reg_PC += 2
             # ExA1 - SKNP Vx - Skip next instruction if key with the value of Vx is not pressed
-            elif n == 0x1:
+            elif kk == 0xA1:
                 if not self.key_states[self.reg_V[x]]:
                     self.reg_PC += 2
         elif instruction & 0xF000 == 0xF000:
             # Fx07 - LD Vx, DT - Set Vx = delay timer value
-            if n == 0x07:
+            if kk == 0x07:
                 self.reg_V[x] = self.reg_DT
             # Fx0A - LD Vx, K - Wait for a key press, store the value of the key in Vx
-            elif n == 0x0A:
+            elif kk == 0x0A:
                 self.reg_V[x] = self.wait_for_pressed_key()
             # Fx15 - LD DT, Vx - Set delay timer = Vx
-            elif n == 0x15:
+            elif kk == 0x15:
                 self.reg_DT = self.reg_V[x]
             # Fx18 - LD ST, Vx - Set sound timer = Vx
-            elif n == 0x18:
+            elif kk == 0x18:
                 self.reg_ST = self.reg_V[x]
             # Fx1E - ADD I, Vx - Set I = I + Vx
-            elif n == 0x1E:
-                self.reg_VI += self.reg_V[x]
+            elif kk == 0x1E:
+                self.reg_I += self.reg_V[x]
             # Fx29 - LD F, Vx - Set I = location of sprite for digit Vx
-            elif n == 0x29:
-                self.reg_VI = self.reg_V[x] * 5
+            elif kk == 0x29:
+                self.reg_I = self.reg_V[x] * 5
             # Fx33 - LD B, Vx - Store BCD representation of Vx in memory locations I, I+1, and I+2
-            elif n == 0x33:
-                self.memory[self.reg_VI]     = self.reg_V[x] / 100;
-                self.memory[self.reg_VI + 1] = self.reg_V[x] % 100 / 10;
-                self.memory[self.reg_VI + 2] = self.reg_V[x] % 10;
+            elif kk == 0x33:
+                self.memory[self.reg_I] = self.reg_V[x] // 100
+                self.memory[self.reg_I+1] = (self.reg_V[x] % 100) // 10
+                self.memory[self.reg_I+2] = (self.reg_V[x] % 10)
             # Fx55 - LD [I], Vx - Store registers V0 through Vx in memory starting at location I
-            elif n == 0x55:
-                for i in range(self.reg_V[x]):
-                    self.memory[self.reg_VI + i] = self.reg_V[i]
+            elif kk == 0x55:
+                for i in range(x+1):
+                    self.memory[self.reg_I + i] = self.reg_V[i]
             # Fx65 - LD Vx, [I] - Read registers V0 through Vx from memory starting at location I
-            elif n == 0x65:
-                for i in range(self.reg_V[x]):
-                     self.reg_V[i] = self.memory[self.reg_VI + i]
+            elif kk == 0x65:
+                for i in range(x+1):
+                     self.reg_V[i] = self.memory[self.reg_I + i]
+
+        self.cycle_end_time = time.time()   
+
+        if self.cycle_end_time - self.cycle_start_time >= 1/60:
+            if self.reg_DT:
+                self.reg_DT -= 1
+        
+            if self.reg_ST:
+                self.reg_ST -= 1
+                pygame.mixer.music.play()
+            self.cycle_start_time = self.cycle_end_time
+
         self.reg_PC += 2
 
     def draw_sprite(self, x, y, n):
         self.reg_V[0xF] = 0x00
-        sprite = self.memory[self.reg_VI: self.reg_VI+n]
+        sprite = self.memory[self.reg_I: self.reg_I+n]
         for row, byte in enumerate(sprite):
             for col in range(8):
                 bit = (byte >> 7 - col) & 0x01
@@ -206,8 +218,6 @@ class Cpu(object):
                 if (bit and self.video_memory[idx]):
                     self.reg_V[0xF] = 0x01
                 self.video_memory[idx] ^= bit
-        # for x in self.video_memory.reshape(self._DISPLAY_SIZE[0], self._DISPLAY_SIZE[1]):
-        #     print(x[:20])
 
     def update_screen(self):
         self.display.draw(self.video_memory)
@@ -233,7 +243,6 @@ class Keyboard(object):
         for event in pygame.event.get():
             if event.type == pygame.KEYDOWN or event.type == pygame.KEYUP:
                 if event.key in self._KEYS.keys():
-                    print('pressed: ' + str(self._KEYS[event.key]))
                     self.key_states[self._KEYS[event.key]] = event.type == pygame.KEYDOWN
             elif event.type == pygame.QUIT:
                 pygame.quit()
@@ -243,6 +252,7 @@ class Keyboard(object):
 class Display(object):
 
     _FILL_COLOR = (0x99, 0xBD, 0x2A)
+    _BOX_COLOR = (0x00, 0x00, 0x00)
 
     def __init__(
             self,
@@ -253,22 +263,31 @@ class Display(object):
         self.scale_factor = scale_factor
         pygame.init()
         window = pygame.display.set_caption(title)
-        self.canvas = pygame.display.set_mode( (self.shape[1]*scale_factor, self.shape[0]*scale_factor) )
+        self.canvas = pygame.display.set_mode( 
+            (self.shape[1]*scale_factor, self.shape[0]*scale_factor) 
+        )
         self.canvas.fill(self._FILL_COLOR)
         pygame.display.update()
         
 
     def draw(self, image):
         self.canvas.fill(self._FILL_COLOR)
-        # for x in image.reshape(self.shape[0],self.shape[1]):
-        #     print(x[:20])
-        with np.nditer([image.reshape((self.shape[0], self.shape[1]))], ['multi_index'], [['readonly']]) as it:
+        with np.nditer(
+            [image.reshape((self.shape[0], self.shape[1]))],
+            ['multi_index'],
+            [['readonly']]
+        ) as it:
             while not it.finished:
                 if it[0][...] == 1:
                     pygame.draw.rect(
                         self.canvas,
-                        (0x00, 0x00, 0x00),
-                        (it.multi_index[1]*self.scale_factor, it.multi_index[0]*self.scale_factor, self.scale_factor, self.scale_factor),
+                        self._BOX_COLOR,
+                        (
+                            it.multi_index[1]*self.scale_factor,
+                            it.multi_index[0]*self.scale_factor,
+                            self.scale_factor,
+                            self.scale_factor
+                        ),
                         0
                     )
                 it.iternext()
@@ -284,8 +303,6 @@ if __name__ == '__main__':
         file_bytes = f.read()
         for i in range(len(file_bytes)):
             cpu.memory[0x200+i] = int(file_bytes[i])
-    # cpu.draw_sprite(0,0,15)
-    # cpu.update_screen()
     while cpu.reg_PC < len(cpu.memory):
         cpu.cycle()
         keyboard.get_pressed_keys()
