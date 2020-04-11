@@ -84,6 +84,7 @@ class Cpu(object):
         # 3xkk - SE Vx, byte - Skip next instruction if Vx = kk
         elif instruction & 0xF000 == 0x3000:
             if self.reg_V[x] == kk:
+                print('kk')
                 self.reg_PC += 2
         # 4xkk - SNE Vx, byte - Skip next instruction if Vx != kk
         elif instruction & 0xF000 == 0x4000:
@@ -92,6 +93,7 @@ class Cpu(object):
         # 5xy0 - SE Vx, Vy - Skip next instruction if Vx = Vy
         elif instruction & 0xF000 == 0x5000:
             if self.reg_V[x] == self.reg_V[y]:
+                print('self')
                 self.reg_PC += 2 
         # 6xkk - LD Vx, byte - Set Vx = kk.
         elif instruction & 0xF000 == 0x6000:
@@ -142,7 +144,7 @@ class Cpu(object):
             self.reg_VI = nnn
         # Bnnn - JP V0, addr - Jump to location nnn + V0.
         elif instruction & 0xF000 == 0xB000:
-            self.reg_PC = nnn + self.reg_V[0x0] - 1
+            self.reg_PC = nnn + self.reg_V[0x0] - 2
         # Cxkk - RND Vx, byte - Set Vx = random byte AND kk
         elif instruction & 0xF000 == 0xC000:
             self.reg_V[x] = np.random.randint(0, 255, dtype=np.uint8) & kk
@@ -150,6 +152,7 @@ class Cpu(object):
         elif instruction & 0xF000 == 0xD000:
             self.draw_sprite(self.reg_V[x], self.reg_V[y], n)
             self.update_screen()
+            # time.sleep(10)
         elif instruction & 0xF000 == 0xE000:
             # Ex9E - SKP Vx - Skip next instruction if key with the value of Vx is pressed
             if n == 0xE:
@@ -185,24 +188,24 @@ class Cpu(object):
                 self.memory[self.reg_VI + 2] = self.reg_V[x] % 10;
             # Fx55 - LD [I], Vx - Store registers V0 through Vx in memory starting at location I
             elif n == 0x55:
-                 for i in range(self._N_REGISTERS):
+                for i in range(self.reg_V[x]):
                     self.memory[self.reg_VI + i] = self.reg_V[i]
             # Fx65 - LD Vx, [I] - Read registers V0 through Vx from memory starting at location I
             elif n == 0x65:
-                for i in range(self._N_REGISTERS):
+                for i in range(self.reg_V[x]):
                      self.reg_V[i] = self.memory[self.reg_VI + i]
         self.reg_PC += 2
 
     def draw_sprite(self, x, y, n):
+        self.reg_V[0xF] = 0x00
         sprite = self.memory[self.reg_VI: self.reg_VI+n]
         for row, byte in enumerate(sprite):
-            for col in range(7, -1, -1):
-                bit = (byte >> col) & 1
-                idx = np.ravel_multi_index(np.array([x + row, y + 7 - col]), self._DISPLAY_SIZE, mode='wrap')
+            for col in range(8):
+                bit = (byte >> 7 - col) & 0x01
+                idx = np.ravel_multi_index((y + row, x + col), self._DISPLAY_SIZE, mode='wrap')
                 if (bit and self.video_memory[idx]):
-                    self.reg_V[0xF] = 1;
+                    self.reg_V[0xF] = 0x01
                 self.video_memory[idx] ^= bit
-
         # for x in self.video_memory.reshape(self._DISPLAY_SIZE[0], self._DISPLAY_SIZE[1]):
         #     print(x[:20])
 
